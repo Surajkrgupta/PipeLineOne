@@ -21,8 +21,12 @@ if sys.platform == "win32":
     import asyncio
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
-SLIDE_WIDTH = 1920
-SLIDE_HEIGHT = 1080
+# 720p instead of 1080p -- meaningfully reduces memory usage during video
+# encoding, which matters on memory-constrained hosts (e.g. Render's free
+# tier at 512MB RAM). Still looks sharp on YouTube; upgrade if you move to a
+# host/plan with more RAM.
+SLIDE_WIDTH = 1280
+SLIDE_HEIGHT = 720
 
 # Base template now takes bg/text/accent/font as theme variables instead of
 # hardcoded colors -- variation_engine.get_weekly_theme() supplies these.

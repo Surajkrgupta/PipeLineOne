@@ -48,6 +48,18 @@ def assemble_video(
         final_audio = voice_audio
 
     video = video.set_audio(final_audio).set_duration(total_duration)
-    video.write_videofile(output_path, fps=24, codec="libx264", audio_codec="aac")
+    # preset="ultrafast" + threads=1: trades a slightly larger file size for
+    # much lower peak memory usage during encoding -- matters on memory-
+    # constrained hosts like Render's free tier (512MB RAM). Revisit if you
+    # move to a host with more headroom and want smaller output files.
+    video.write_videofile(
+        output_path,
+        fps=24,
+        codec="libx264",
+        audio_codec="aac",
+        preset="ultrafast",
+        threads=1,
+        logger=None,  # suppress MoviePy's verbose per-frame progress bar in logs
+    )
 
     return output_path
