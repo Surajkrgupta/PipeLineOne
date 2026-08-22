@@ -8,6 +8,7 @@ from app.models import PipelineRun, RunStatus
 from app.pipelines.dsa_pipeline import approve_and_upload, run_dsa_pipeline_safe
 from app.scheduler import start_scheduler
 from app.schemas import PipelineRunOut, TriggerResponse
+from app.services import notifier
 
 Base.metadata.create_all(bind=engine)
 
@@ -63,9 +64,6 @@ def approve_run(run_id: int, db: Session = Depends(get_db)):
     return approve_and_upload(db, run)
 
 
-from app.services import notifier
-
-
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -74,6 +72,7 @@ def health():
 @app.post("/test-telegram")
 def test_telegram():
     """Sends a test message to verify TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID
-    are configured correctly. Check your Telegram chat after calling this."""
-    notifier.notify("✅ Telegram notifications are working correctly for the DSA pipeline.")
-    return {"status": "sent", "note": "Check your Telegram chat. If nothing arrived, verify TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are set."}
+    are configured correctly. Returns the REAL outcome -- check the 'sent'
+    field, not just that this endpoint returned 200."""
+    result = notifier.notify("✅ Telegram notifications are working correctly for the DSA pipeline.")
+    return result
