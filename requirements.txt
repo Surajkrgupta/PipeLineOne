@@ -4,7 +4,7 @@ sqlalchemy==2.0.35
 apscheduler==3.10.4
 pydantic-settings==2.5.2
 requests==2.32.3
-edge-tts==6.1.19
+edge-tts==7.2.3
 playwright==1.47.0
 pygments==2.18.0
 moviepy==1.0.3
