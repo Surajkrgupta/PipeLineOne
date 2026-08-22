@@ -9,8 +9,10 @@ from app.pipelines.dsa_pipeline import approve_and_upload, run_dsa_pipeline_safe
 from app.scheduler import start_scheduler
 from app.schemas import PipelineRunOut, TriggerResponse
 from app.services import notifier
+from app.startup import restore_youtube_secrets
 
 Base.metadata.create_all(bind=engine)
+restore_youtube_secrets()
 
 
 @asynccontextmanager

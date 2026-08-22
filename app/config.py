@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     yt_client_secrets_file: str = "./secrets/client_secret.json"
     yt_token_file: str = "./secrets/yt_token.json"
     yt_upload_privacy: str = "private"
+    # Base64-encoded file contents -- used to reconstruct the real files on
+    # hosts like Render where secrets/*.json can't be committed to git (and
+    # therefore never reach the container otherwise). See app/startup.py.
+    yt_client_secret_b64: str = ""
+    yt_token_b64: str = ""
 
     # Telegram
     telegram_bot_token: str = ""
