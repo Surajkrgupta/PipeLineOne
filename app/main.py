@@ -76,3 +76,24 @@ def test_telegram():
     field, not just that this endpoint returned 200."""
     result = notifier.notify("✅ Telegram notifications are working correctly for the DSA pipeline.")
     return result
+
+
+@app.get("/test-network")
+def test_network():
+    """Diagnostic: tests raw outbound HTTPS connectivity to Groq's API,
+    completely bypassing the Groq SDK. This isolates whether a failure is a
+    genuine network/DNS/TLS problem on this host, versus something specific
+    to how the SDK builds its client."""
+    import httpx
+    results = {}
+    for name, url in [
+        ("groq_api", "https://api.groq.com"),
+        ("general_internet", "https://www.google.com"),
+    ]:
+        try:
+            resp = httpx.get(url, timeout=10.0, trust_env=False)
+            results[name] = {"reachable": True, "status_code": resp.status_code}
+        except Exception as e:
+            cause = f" (cause: {type(e.__cause__).__name__}: {e.__cause__})" if e.__cause__ else ""
+            results[name] = {"reachable": False, "error": f"{type(e).__name__}: {e}{cause}"}
+    return results

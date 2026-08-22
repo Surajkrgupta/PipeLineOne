@@ -146,10 +146,18 @@ def generate_solution(
 
         except Exception as e:
             last_error = e
+            # Groq's SDK wraps the real network error in a generic message
+            # like "Connection error." -- print the full chain immediately so
+            # Render's logs show the actual cause (DNS failure, TLS failure,
+            # timeout, etc.) rather than just the unhelpful wrapper text.
+            print(f"[llm_generator] attempt {attempt + 1} failed: {type(e).__name__}: {e}")
+            if e.__cause__:
+                print(f"[llm_generator] underlying cause: {type(e.__cause__).__name__}: {e.__cause__}")
             if attempt < max_retries:
                 import time
                 time.sleep(2 * (attempt + 1))  # short backoff: 2s, 4s
                 continue
 
+    cause_detail = f" | underlying cause: {type(last_error.__cause__).__name__}: {last_error.__cause__}" if last_error.__cause__ else ""
     raise LLMGenerationError(f"LLM generation failed after {max_retries + 1} attempts "
-                              f"({type(last_error).__name__}): {last_error}") from last_error
+                              f"({type(last_error).__name__}): {last_error}{cause_detail}") from last_error
