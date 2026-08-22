@@ -19,10 +19,11 @@ def assemble_video(
     output_path: str,
     background_music_path: str | None = None,
     music_volume: float = 0.08,
-) -> str:
+) -> tuple[str, float]:
     """slide_paths: ordered list of PNG paths (title, code, complexity, ...).
     Duration is split evenly across slides for v1 -- upgrade later by timing
-    slide changes to sentence boundaries in the narration script."""
+    slide changes to sentence boundaries in the narration script.
+    Returns (output_path, duration_seconds)."""
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     voice_audio = AudioFileClip(voiceover_path)
@@ -62,4 +63,4 @@ def assemble_video(
         logger=None,  # suppress MoviePy's verbose per-frame progress bar in logs
     )
 
-    return output_path
+    return output_path, total_duration

@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     # Telegram
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+    # A random string you choose -- set the same value when registering the
+    # webhook with Telegram (see README). Telegram echoes it back in a header
+    # on every webhook call, letting us reject requests that aren't genuinely
+    # from Telegram.
+    telegram_webhook_secret: str = ""
 
     # Pipeline
     require_manual_approval: bool = True

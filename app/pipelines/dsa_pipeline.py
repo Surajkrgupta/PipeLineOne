@@ -1,11 +1,11 @@
 """Orchestrates the full DSA POTD pipeline: fetch -> generate -> render ->
-assemble -> (approval gate) -> upload. Each stage updates the PipelineRun row
-so a failure at any point leaves a clear record of how far it got.
+assemble -> (Telegram approval gate) -> upload. Each stage updates the
+PipelineRun row so a failure at any point leaves a clear record of how far
+it got.
 
-This version wires in variation_engine so theme, narration tone, voice, and
-music all rotate automatically (weekly for visuals/voice/tone, monthly for
-music) -- no manual switching, and no two consecutive weeks look identical,
-which matters for staying clear of YouTube's inauthentic-content policy.
+Approval now happens via Telegram inline buttons (Approve/Reject) rather
+than an HTTP call -- see notifier.send_approval_request and
+app/main.py's /telegram-webhook endpoint, which handles the button taps.
 """
 
 import os
@@ -28,8 +28,9 @@ from app.services import (
 
 def run_dsa_pipeline(db: Session) -> PipelineRun:
     """Runs stages 1-4 (fetch, generate, render, assemble) always.
-    If REQUIRE_MANUAL_APPROVAL is True, stops and waits for a call to
-    approve_and_upload(). Otherwise uploads immediately."""
+    If REQUIRE_MANUAL_APPROVAL is True, sends a Telegram approval request
+    and stops -- the webhook handler calls approve_and_upload/reject_run
+    when the button is tapped. Otherwise uploads immediately."""
 
     # --- Stage 1: fetch ---
     try:
@@ -62,6 +63,9 @@ def run_dsa_pipeline(db: Session) -> PipelineRun:
     voice = variation_engine.get_weekly_voice()
     tone = variation_engine.get_weekly_narration_tone()
     opening_style = variation_engine.get_weekly_opening_style()
+
+    run.theme_name = theme["name"]
+    run.voice_name = voice
 
     # --- Stage 2: LLM generation ---
     try:
@@ -99,11 +103,10 @@ def run_dsa_pipeline(db: Session) -> PipelineRun:
 
     # --- Stage 4: assemble video ---
     try:
-        music_dir = os.path.join(os.path.dirname(settings.output_dir), "..", "assets", "music")
         music_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "assets", "music"))
         music_track = variation_engine.get_monthly_music_track(music_dir)
 
-        video_path = video_assembler.assemble_video(
+        video_path, duration = video_assembler.assemble_video(
             slide_paths=[title_slide, code_slide, complexity_slide],
             voiceover_path=voiceover_path,
             output_path=f"{run_dir}/final_video.mp4",
@@ -111,6 +114,8 @@ def run_dsa_pipeline(db: Session) -> PipelineRun:
         )
         run.video_path = video_path
         run.thumbnail_path = thumbnail_path
+        run.video_duration_seconds = duration
+        db.commit()
     except Exception as e:
         _fail(db, run, f"video assembly stage: {e}")
         raise
@@ -119,12 +124,22 @@ def run_dsa_pipeline(db: Session) -> PipelineRun:
     if settings.require_manual_approval:
         run.status = RunStatus.awaiting_approval
         db.commit()
-        notifier.notify(
-            f"🎬 Video ready for review: '{run.problem_title}' (run #{run.id})\n"
-            f"Theme: {theme['name']} | Voice: {voice}\n"
-            f"File: {video_path}\n"
-            f"Call POST /approve/{run.id} to publish, or review the file first."
+
+        result = notifier.send_approval_request(
+            run_id=run.id,
+            problem_title=run.problem_title,
+            difficulty=run.difficulty,
+            video_duration_seconds=run.video_duration_seconds,
+            theme_name=run.theme_name,
+            voice_name=run.voice_name,
         )
+        if result["sent"]:
+            run.telegram_chat_id = result["chat_id"]
+            run.telegram_message_id = result["message_id"]
+            db.commit()
+        else:
+            print(f"[dsa_pipeline] Warning: could not send Telegram approval request for run #{run.id}")
+
         return run
 
     return approve_and_upload(db, run)
@@ -132,7 +147,9 @@ def run_dsa_pipeline(db: Session) -> PipelineRun:
 
 def approve_and_upload(db: Session, run: PipelineRun) -> PipelineRun:
     """Uploads a rendered run to YouTube, including the custom thumbnail and
-    the required synthetic-content disclosure flag."""
+    the required synthetic-content disclosure flag. If this run has an
+    associated Telegram message, edits it with the final result instead of
+    sending a separate notification."""
     try:
         run.status = RunStatus.uploading
         db.commit()
@@ -149,18 +166,38 @@ def approve_and_upload(db: Session, run: PipelineRun) -> PipelineRun:
             title=title,
             description=description,
             tags=["leetcode", "dsa", "coding interview", run.problem_title.lower()],
-            thumbnail_path=getattr(run, "thumbnail_path", None),
+            thumbnail_path=run.thumbnail_path,
         )
 
         run.youtube_video_id = video_id
         run.status = RunStatus.uploaded
         db.commit()
-        notifier.notify(f"✅ Uploaded: https://youtu.be/{video_id}")
+
+        final_text = f"✅ *Published!*\n\n{run.problem_title}\n\nhttps://youtu.be/{video_id}"
+        if run.telegram_chat_id and run.telegram_message_id:
+            notifier.edit_message(run.telegram_chat_id, run.telegram_message_id, final_text)
+        else:
+            notifier.notify(final_text)
+
         return run
 
     except youtube_uploader.YouTubeUploadError as e:
         _fail(db, run, f"upload stage: {e}")
         raise
+
+
+def reject_run(db: Session, run: PipelineRun) -> PipelineRun:
+    """Marks a run as rejected -- called from the Telegram webhook when the
+    person taps Reject. Does NOT delete generated files, so you can inspect
+    what went wrong if needed; just won't be uploaded."""
+    run.status = RunStatus.rejected
+    db.commit()
+
+    final_text = f"❌ *Rejected*\n\n{run.problem_title}\n\nThis run will not be published."
+    if run.telegram_chat_id and run.telegram_message_id:
+        notifier.edit_message(run.telegram_chat_id, run.telegram_message_id, final_text)
+
+    return run
 
 
 def _fail(db: Session, run: PipelineRun, message: str) -> None:
@@ -188,7 +225,7 @@ def run_dsa_pipeline_safe(db: Session) -> PipelineRun | None:
 
         stuck_run = (
             db.query(PipelineRun)
-            .filter(PipelineRun.status.notin_([RunStatus.uploaded, RunStatus.failed]))
+            .filter(PipelineRun.status.notin_([RunStatus.uploaded, RunStatus.rejected, RunStatus.failed]))
             .order_by(PipelineRun.created_at.desc())
             .first()
         )
