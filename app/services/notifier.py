@@ -1,11 +1,13 @@
 """Sends run status notifications via Telegram, including interactive
 Approve/Reject buttons for the video review step.
 
-Plain text notifications (notify) work with just a bot token + chat ID.
-Interactive approval (send_approval_request) additionally requires a
-Telegram webhook to be registered so button taps reach this app -- see
-app/main.py's /telegram-webhook endpoint and the README for the one-time
-setWebhook command.
+Deliberately uses PLAIN TEXT (no parse_mode) rather than Markdown. Telegram's
+legacy Markdown parser is strict about unescaped special characters (a
+single unmatched underscore, asterisk, or bracket breaks the entire
+message with "can't find end of the entity"). Since problem titles and
+theme names (e.g. "midnight_blue") can contain these characters
+unpredictably, plain text is the reliable choice -- MarkdownV2 with full
+escaping would work too, but adds real complexity for a small cosmetic gain.
 """
 
 import requests
@@ -69,26 +71,25 @@ def send_approval_request(
         duration_str = f"{minutes}:{seconds:02d}"
 
     text = (
-        f"🎬 *New video ready for review*\n\n"
-        f"*Title:* {problem_title}\n"
-        f"*Difficulty:* {difficulty}\n"
-        f"*Duration:* {duration_str}\n"
-        f"*Theme:* {theme_name or 'default'}\n"
-        f"*Voice:* {voice_name or 'default'}\n"
-        f"*Run ID:* #{run_id}"
+        f"New video ready for review\n\n"
+        f"Title: {problem_title}\n"
+        f"Difficulty: {difficulty}\n"
+        f"Duration: {duration_str}\n"
+        f"Theme: {theme_name or 'default'}\n"
+        f"Voice: {voice_name or 'default'}\n"
+        f"Run ID: #{run_id}"
     )
 
     reply_markup = {
         "inline_keyboard": [[
-            {"text": "✅ Approve", "callback_data": f"approve:{run_id}"},
-            {"text": "❌ Reject", "callback_data": f"reject:{run_id}"},
+            {"text": "Approve", "callback_data": f"approve:{run_id}"},
+            {"text": "Reject", "callback_data": f"reject:{run_id}"},
         ]]
     }
 
     result = _api("sendMessage", {
         "chat_id": settings.telegram_chat_id,
         "text": text,
-        "parse_mode": "Markdown",
         "reply_markup": reply_markup,
     })
 
@@ -106,7 +107,6 @@ def edit_message(chat_id: str, message_id: str, text: str, remove_buttons: bool 
         "chat_id": chat_id,
         "message_id": int(message_id),
         "text": text,
-        "parse_mode": "Markdown",
     }
     if remove_buttons:
         payload["reply_markup"] = {"inline_keyboard": []}
