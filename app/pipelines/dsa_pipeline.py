@@ -149,31 +149,43 @@ def approve_and_upload(db: Session, run: PipelineRun) -> PipelineRun:
     """Uploads a rendered run to YouTube, including the custom thumbnail and
     the required synthetic-content disclosure flag. If this run has an
     associated Telegram message, edits it with the final result instead of
-    sending a separate notification."""
+    sending a separate notification.
+
+    If run.is_test is True (created via /test-approval-flow), skips the real
+    YouTube API call entirely -- this lets you verify the Telegram button ->
+    webhook -> approval loop works without burning upload quota or posting
+    anything real."""
     try:
         run.status = RunStatus.uploading
         db.commit()
 
-        title = f"{run.problem_title} - LeetCode Daily Challenge Solution ({run.difficulty})"
-        description = (
-            f"Solution walkthrough for today's LeetCode Problem of the Day: {run.problem_title}.\n\n"
-            f"Difficulty: {run.difficulty}\n\n"
-            f"This video uses AI-assisted narration and visuals.\n\n"
-            f"#LeetCode #DSA #CodingInterview #Programming"
-        )
-        video_id = youtube_uploader.upload_video(
-            video_path=run.video_path,
-            title=title,
-            description=description,
-            tags=["leetcode", "dsa", "coding interview", run.problem_title.lower()],
-            thumbnail_path=run.thumbnail_path,
-        )
+        if run.is_test:
+            video_id = "TEST-NO-REAL-UPLOAD"
+        else:
+            title = f"{run.problem_title} - LeetCode Daily Challenge Solution ({run.difficulty})"
+            description = (
+                f"Solution walkthrough for today's LeetCode Problem of the Day: {run.problem_title}.\n\n"
+                f"Difficulty: {run.difficulty}\n\n"
+                f"This video uses AI-assisted narration and visuals.\n\n"
+                f"#LeetCode #DSA #CodingInterview #Programming"
+            )
+            video_id = youtube_uploader.upload_video(
+                video_path=run.video_path,
+                title=title,
+                description=description,
+                tags=["leetcode", "dsa", "coding interview", run.problem_title.lower()],
+                thumbnail_path=run.thumbnail_path,
+            )
 
         run.youtube_video_id = video_id
         run.status = RunStatus.uploaded
         db.commit()
 
-        final_text = f"✅ *Published!*\n\n{run.problem_title}\n\nhttps://youtu.be/{video_id}"
+        if run.is_test:
+            final_text = f"✅ Test approved successfully\n\n{run.problem_title}\n\n(No real video was uploaded -- this confirms the button → webhook → approval flow works.)"
+        else:
+            final_text = f"✅ Published!\n\n{run.problem_title}\n\nhttps://youtu.be/{video_id}"
+
         if run.telegram_chat_id and run.telegram_message_id:
             notifier.edit_message(run.telegram_chat_id, run.telegram_message_id, final_text)
         else:
@@ -193,9 +205,47 @@ def reject_run(db: Session, run: PipelineRun) -> PipelineRun:
     run.status = RunStatus.rejected
     db.commit()
 
-    final_text = f"❌ *Rejected*\n\n{run.problem_title}\n\nThis run will not be published."
+    final_text = f"❌ Rejected\n\n{run.problem_title}\n\nThis run will not be published."
     if run.telegram_chat_id and run.telegram_message_id:
         notifier.edit_message(run.telegram_chat_id, run.telegram_message_id, final_text)
+
+    return run
+
+
+def create_test_approval_request(db: Session) -> PipelineRun:
+    """Creates a fake run with is_test=True and sends a real Telegram
+    approval request for it -- lets you verify the button -> webhook ->
+    approval loop end-to-end without running the full pipeline (no LLM call,
+    no video render, no YouTube quota used). Approving it just marks it
+    uploaded with a fake video ID; rejecting it works identically to a real run."""
+    import uuid
+
+    run = PipelineRun(
+        problem_slug=f"test-{uuid.uuid4().hex[:8]}",
+        problem_title="Test Problem: Two Sum (Telegram flow check)",
+        difficulty="Easy",
+        status=RunStatus.awaiting_approval,
+        video_duration_seconds=125,
+        theme_name="midnight_blue (test)",
+        voice_name="en-US-GuyNeural (test)",
+        is_test=True,
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+
+    result = notifier.send_approval_request(
+        run_id=run.id,
+        problem_title=run.problem_title,
+        difficulty=run.difficulty,
+        video_duration_seconds=run.video_duration_seconds,
+        theme_name=run.theme_name,
+        voice_name=run.voice_name,
+    )
+    if result["sent"]:
+        run.telegram_chat_id = result["chat_id"]
+        run.telegram_message_id = result["message_id"]
+        db.commit()
 
     return run
 
